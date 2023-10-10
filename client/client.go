@@ -24,10 +24,12 @@ func main() {
 	}
 
 	res, err := http.DefaultClient.Do(req)
-
 	if err != nil {
-		panic(err)
+		log.Println(err)
+		fmt.Println(err)
+		return
 	}
+	defer res.Body.Close()
 
 	f, err := os.Create("cotacao.txt")
 
@@ -40,18 +42,14 @@ func main() {
 	var cotacao string
 
 	err = json.Unmarshal(body, &cotacao)
-
-	_, err = f.Write([]byte(fmt.Sprintf("Dólar: %s", cotacao)))
-
-	f.Close()
-
 	if err != nil {
 		panic(err)
 	}
 
-	select {
-	case <-ctx.Done():
-		log.Println("Tempo da requisição excedido")
-		fmt.Println("Tempo da requisição excedido")
+	_, err = f.Write([]byte(fmt.Sprintf("Dólar: %s", cotacao)))
+	if err != nil {
+		panic(err)
 	}
+
+	f.Close()
 }

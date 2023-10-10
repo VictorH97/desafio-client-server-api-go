@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Cotacao struct {
@@ -37,18 +40,17 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://economia.awesomeapi.com.br/json/last/USD-BRL", nil)
-
 	if err != nil {
 		panic(err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
-
 	if err != nil {
-		panic(err)
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+		return
 	}
-
-	//Salvar cotação no banco de dados
+	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
 
@@ -59,12 +61,83 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 	var cotacao Cotacao
 
 	err = json.Unmarshal(body, &cotacao)
-
-	json.NewEncoder(w).Encode(cotacao.Usdbrl.Bid)
-
-	select {
-	case <-ctx.Done():
-		log.Println("Tempo da requisição excedido")
-		http.Error(w, "Tempo da requisição excedido", http.StatusRequestTimeout)
+	if err != nil {
+		panic(err)
 	}
+
+	err = json.NewEncoder(w).Encode(cotacao.Usdbrl.Bid)
+	if err != nil {
+		panic(err)
+	}
+
+	err = salvarCotacao(cotacao)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+	}
+}
+
+func salvarCotacao(cotacao Cotacao) error {
+	dbCtx := context.Background()
+	dbCtx, cancel := context.WithTimeout(dbCtx, 10*time.Millisecond)
+	defer cancel()
+
+	db, err := sql.Open("sqlite3", "./cotacao.db")
+
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE TABLE Cotacao (
+		Id INTEGER PRIMARY KEY AUTOINCREMENT
+		,Code       TEXT
+		,Codein     TEXT
+		,Name       TEXT
+		,High       TEXT
+		,Low        TEXT
+		,VarBid     TEXT
+		,PctChange  TEXT
+		,Bid        TEXT
+		,Ask        TEXT
+		,Timestamp  TEXT
+		,CreateDate TEXT
+		)`)
+	if err != nil {
+		return err
+	}
+
+	stmt, err := db.Prepare(`INSERT INTO Cotacao(
+		Code
+		,Codein
+		,Name
+		,High
+		,Low
+		,VarBid
+		,PctChange
+		,Bid
+		,Ask
+		,Timestamp
+		,CreateDate)
+		VALUES(?,?,?,?,?,?,?,?,?,?,DATETIME(?))`)
+	if err != nil {
+		return err
+	}
+
+	_, err = stmt.ExecContext(dbCtx,
+		cotacao.Usdbrl.Code,
+		cotacao.Usdbrl.Codein,
+		cotacao.Usdbrl.Name,
+		cotacao.Usdbrl.High,
+		cotacao.Usdbrl.Low,
+		cotacao.Usdbrl.VarBid,
+		cotacao.Usdbrl.PctChange,
+		cotacao.Usdbrl.Bid,
+		cotacao.Usdbrl.Ask,
+		cotacao.Usdbrl.Timestamp,
+		cotacao.Usdbrl.CreateDate)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
